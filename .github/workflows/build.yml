@@ -42,32 +42,32 @@ jobs:
       - name: Get version from tag (if available)
         id: get_version
         run: |
-          # 从标签提取版本号（如 v6.1.0 -> 6.1.0），若无标签则使用 version.txt
           if [[ "${{ github.ref_type }}" == "tag" && "${{ github.ref_name }}" =~ ^v ]]; then
             VERSION="${{ github.ref_name }}"
-            VERSION="${VERSION#v}"  # Bash语法去除前缀"v"
+            VERSION="${VERSION#v}"
             echo "VERSION=$VERSION" >> $GITHUB_ENV
           else
             echo "VERSION=$(cat app/version.txt)" >> $GITHUB_ENV
           fi
         shell: bash
 
-      # Windows specific setup
+      # Windows依赖
       - name: Setup Windows dependencies
         if: matrix.platform.name == 'Windows'
         run: |
           choco install 7zip -y
           echo "PATH=$env:PATH;C:\Program Files\7-Zip" >> $env:GITHUB_ENV
 
+      # 正确安装Qt（Windows/macOS）
       - name: Setup Qt (Windows/macOS)
         if: matrix.platform.name != 'Linux' && matrix.platform.name != 'Steam Link'
-        uses: jurplel/setup-qt@v3  # 修正为社区维护的Qt安装工具
+        uses: jurplel/install-qt-action@v4  # 官方正确动作
         with:
           version: ${{ matrix.platform.qt_version }}
           arch: ${{ matrix.platform.qt_arch }}
           cache: true
 
-      # Linux specific setup
+      # Linux依赖
       - name: Setup Linux dependencies
         if: matrix.platform.name == 'Linux'
         run: |
@@ -78,43 +78,43 @@ jobs:
           sudo apt install -y qt515base qt515quickcontrols2 qt515svg qt515wayland python3-pip nasm libgbm-dev libdrm-dev libfreetype6-dev libasound2-dev libdbus-1-dev libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libglu1-mesa-dev libibus-1.0-dev libpulse-dev libudev-dev libx11-dev libxcursor-dev libxext-dev libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev libxss-dev libxt-dev libxv-dev libxxf86vm-dev libxcb-dri3-dev libx11-xcb-dev wayland-protocols libopus-dev libvdpau-dev vulkan-sdk
           sudo pip3 install meson
           
-          # Build SDL2
+          # 构建SDL2
           export SDL2_REV=86fd4ed83cdcf71fef6a57766b126e88f923acd3
           git clone https://github.com/libsdl-org/SDL.git SDL2
           cd SDL2 && git checkout $SDL2_REV && ./configure && make -j$(nproc) && sudo make install && cd ..
           
-          # Build SDL2_ttf
+          # 构建SDL2_ttf
           export SDL2_TTF_VER=2.22.0
           wget https://github.com/libsdl-org/SDL_ttf/releases/download/release-$SDL2_TTF_VER/SDL2_ttf-$SDL2_TTF_VER.tar.gz
           tar -xf SDL2_ttf-$SDL2_TTF_VER.tar.gz && cd SDL2_ttf-$SDL2_TTF_VER && ./configure && make -j$(nproc) && sudo make install && cd ..
           
-          # Build libva
+          # 构建libva
           export LIBVA_VER=2.22.0
           git clone --branch $LIBVA_VER --depth 1 https://github.com/intel/libva.git
           cd libva && ./autogen.sh && ./configure --enable-x11 --enable-wayland && make -j$(nproc) && sudo make install && cd ..
           
-          # Build dav1d
+          # 构建dav1d
           export DAV1D_VER=1.5.0
           git clone --branch $DAV1D_VER --depth 1 https://code.videolan.org/videolan/dav1d.git
           cd dav1d && meson setup build -Ddefault_library=static -Dbuildtype=release -Denable_tools=false -Denable_tests=false && ninja -C build && sudo ninja install -C build && sudo ldconfig && cd ..
           
-          # Build libplacebo
+          # 构建libplacebo
           export LIBPLACEBO_REV=v7.349.0
           git clone https://code.videolan.org/videolan/libplacebo.git
           cd libplacebo && git checkout $LIBPLACEBO_REV && git apply ../app/deploy/linux/appimage/*.patch && git submodule update --init --recursive && meson setup build -Dvulkan=enabled -Dopengl=disabled -Ddemos=false && ninja -C build && sudo ninja install -C build && sudo ldconfig && cd ..
           
-          # Build FFmpeg
+          # 构建FFmpeg
           export FFMPEG_REV=87ccf995cb855f0baced9916928b7b48d8b6ed9d
           git clone https://github.com/FFmpeg/FFmpeg.git FFmpeg
           cd FFmpeg && git checkout $FFMPEG_REV && ./configure --enable-pic --disable-static --enable-shared --disable-all --enable-avcodec --enable-avformat --enable-swscale --enable-decoder=h264 --enable-decoder=hevc --enable-decoder=av1 --enable-hwaccel=h264_vaapi --enable-hwaccel=hevc_vaapi --enable-hwaccel=av1_vaapi --enable-hwaccel=h264_vdpau --enable-hwaccel=hevc_vdpau --enable-hwaccel=av1_vdpau --enable-libdrm --enable-hwaccel=h264_vulkan --enable-hwaccel=hevc_vulkan --enable-hwaccel=av1_vulkan --enable-libdav1d --enable-decoder=libdav1d && make -j$(nproc) && sudo make install && sudo ldconfig && cd ..
           
-          # Install linuxdeployqt
+          # 安装linuxdeployqt
           mkdir -p $HOME/bin
           wget -O $HOME/bin/linuxdeployqt https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
           chmod a+x $HOME/bin/linuxdeployqt
           echo "$HOME/bin" >> $GITHUB_PATH
 
-      # Steam Link specific setup
+      # Steam Link依赖
       - name: Setup Steam Link dependencies
         if: matrix.platform.name == 'Steam Link'
         run: |
@@ -122,24 +122,17 @@ jobs:
           git clone --depth=1 https://github.com/ValveSoftware/steamlink-sdk.git $HOME/steamlink-sdk
           echo "STEAMLINK_SDK_PATH=$HOME/steamlink-sdk" >> $GITHUB_ENV
 
-      # Build steps
+      # 构建步骤
       - name: Build Windows
         if: matrix.platform.name == 'Windows'
         run: |
-          # Copy qmake helpers
           copy /y scripts\appveyor\qmake.bat ${{ env.Qt6_DIR }}\bin\
           copy /y scripts\appveyor\qtpaths.bat ${{ env.Qt6_DIR }}\bin\
           copy /y scripts\appveyor\target_qt.conf ${{ env.Qt6_DIR }}\bin\
           
-          # Build x64
           set PATH=%PATH%;${{ env.Qt6_DIR }}\bin
           scripts\build-arch.bat Release x64
-          
-          # Build arm64
-          set PATH=%PATH%;${{ env.Qt6_DIR }}\bin
           scripts\build-arch.bat Release arm64
-          
-          # Generate bundle
           scripts\generate-bundle.bat Release
         shell: cmd
 
@@ -161,7 +154,7 @@ jobs:
         run: |
           scripts/build-steamlink-app.sh
 
-      # Upload artifacts
+      # 上传产物
       - name: Upload Windows artifacts
         if: matrix.platform.name == 'Windows'
         uses: actions/upload-artifact@v4

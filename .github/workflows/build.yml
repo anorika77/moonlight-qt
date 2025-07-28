@@ -61,7 +61,7 @@ jobs:
 
       - name: Setup Qt (Windows/macOS)
         if: matrix.platform.name != 'Linux' && matrix.platform.name != 'Steam Link'
-        uses: qt-actions/setup-qt@v3
+        uses: jurplel/setup-qt@v3  # 修正为社区维护的Qt安装工具
         with:
           version: ${{ matrix.platform.qt_version }}
           arch: ${{ matrix.platform.qt_arch }}

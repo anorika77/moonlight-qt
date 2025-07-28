@@ -13,6 +13,7 @@ jobs:
     runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
+      max-parallel: 2  # 限制并行任务数，避免资源竞争导致调度延迟
       matrix:
         platform:
           - name: Windows
@@ -23,14 +24,14 @@ jobs:
           - name: macOS
             os: macos-latest
             qt_version: 6.6.0
-            qt_arch: clang_64  # Qt官方macOS架构标识
+            qt_arch: clang_64
             artifact_prefix: Moonlight
           - name: Linux
-            os: ubuntu-20.04
+            os: ubuntu-22.04  # 升级到更现代的系统，提升调度优先级
             qt_version: 5.15.4
             artifact_prefix: Moonlight
           - name: Steam Link
-            os: ubuntu-16.04
+            os: ubuntu-20.04  # 放弃已淘汰的ubuntu-16.04，使用受支持版本
             artifact_prefix: Moonlight-SteamLink
 
     steps:
@@ -51,14 +52,14 @@ jobs:
           fi
         shell: bash
 
-      # Windows依赖安装
+      # Windows依赖配置
       - name: Setup Windows dependencies
         if: matrix.platform.name == 'Windows'
         run: |
           choco install 7zip -y
-          echo "PATH=$env:PATH;C:\Program Files\7-Zip" >> $GITHUB_ENV
+          echo "PATH=$env:PATH;C:\Program Files\7-Zip" >> $env:GITHUB_ENV
 
-      # Qt安装（修复架构参数）
+      # Qt安装（跨平台统一配置）
       - name: Setup Qt (Windows/macOS)
         if: matrix.platform.name != 'Linux' && matrix.platform.name != 'Steam Link'
         uses: jurplel/install-qt-action@v4
@@ -67,28 +68,65 @@ jobs:
           arch: ${{ matrix.platform.qt_arch }}
           cache: true
 
-      # Linux依赖安装（保持原逻辑）
+      # Linux依赖优化（用系统包替代部分源码编译）
       - name: Setup Linux dependencies
         if: matrix.platform.name == 'Linux'
         run: |
-          sudo add-apt-repository ppa:beineri/opt-qt-5.15.4-focal -y
-          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
-          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-1.3.280-focal.list https://packages.lunarg.com/vulkan/1.3.280/lunarg-vulkan-1.3.280-focal.list
+          # 基础依赖与系统包安装（减少源码编译量）
           sudo apt update
-          sudo apt install -y qt515base qt515quickcontrols2 qt515svg qt515wayland python3-pip nasm libgbm-dev libdrm-dev libfreetype6-dev libasound2-dev libdbus-1-dev libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libglu1-mesa-dev libibus-1.0-dev libpulse-dev libudev-dev libx11-dev libxcursor-dev libxext-dev libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev libxss-dev libxt-dev libxv-dev libxxf86vm-dev libxcb-dri3-dev libx11-xcb-dev wayland-protocols libopus-dev libvdpau-dev vulkan-sdk
+          sudo apt install -y \
+            libsdl2-dev libsdl2-ttf-dev \  # 用系统包替代SDL2源码编译
+            qt515base qt515quickcontrols2 qt515svg qt515wayland \
+            python3-pip nasm libgbm-dev libdrm-dev libfreetype6-dev \
+            libasound2-dev libdbus-1-dev libegl1-mesa-dev libgl1-mesa-dev \
+            libgles2-mesa-dev libglu1-mesa-dev libibus-1.0-dev libpulse-dev \
+            libudev-dev libx11-dev libxcursor-dev libxext-dev libxi-dev \
+            libxinerama-dev libxkbcommon-dev libxrandr-dev libxss-dev \
+            libxt-dev libxv-dev libxxf86vm-dev libxcb-dri3-dev libx11-xcb-dev \
+            wayland-protocols libopus-dev libvdpau-dev vulkan-sdk
           sudo pip3 install meson
-          
-          # 以下依赖构建命令保持原逻辑（省略重复内容）...
 
-      # Steam Link依赖安装（保持原逻辑）
+          # 保留必须源码编译的依赖（版本特定需求）
+          # 构建libva
+          export LIBVA_VER=2.22.0
+          git clone --branch $LIBVA_VER --depth 1 https://github.com/intel/libva.git
+          cd libva && ./autogen.sh && ./configure --enable-x11 --enable-wayland && make -j$(nproc) && sudo make install && cd ..
+
+          # 构建dav1d
+          export DAV1D_VER=1.5.0
+          git clone --branch $DAV1D_VER --depth 1 https://code.videolan.org/videolan/dav1d.git
+          cd dav1d && meson setup build -Ddefault_library=static -Dbuildtype=release -Denable_tools=false -Denable_tests=false && ninja -C build && sudo ninja install -C build && sudo ldconfig && cd ..
+
+          # 构建libplacebo
+          export LIBPLACEBO_REV=v7.349.0
+          git clone https://code.videolan.org/videolan/libplacebo.git
+          cd libplacebo && git checkout $LIBPLACEBO_REV && git apply ../app/deploy/linux/appimage/*.patch && git submodule update --init --recursive && meson setup build -Dvulkan=enabled -Dopengl=disabled -Ddemos=false && ninja -C build && sudo ninja install -C build && sudo ldconfig && cd ..
+
+          # 构建FFmpeg
+          export FFMPEG_REV=87ccf995cb855f0baced9916928b7b48d8b6ed9d
+          git clone https://github.com/FFmpeg/FFmpeg.git FFmpeg
+          cd FFmpeg && git checkout $FFMPEG_REV && ./configure --enable-pic --disable-static --enable-shared --disable-all --enable-avcodec --enable-avformat --enable-swscale --enable-decoder=h264 --enable-decoder=hevc --enable-decoder=av1 --enable-hwaccel=h264_vaapi --enable-hwaccel=hevc_vaapi --enable-hwaccel=av1_vaapi --enable-hwaccel=h264_vdpau --enable-hwaccel=hevc_vdpau --enable-hwaccel=av1_vdpau --enable-libdrm --enable-hwaccel=h264_vulkan --enable-hwaccel=hevc_vulkan --enable-hwaccel=av1_vulkan --enable-libdav1d --enable-decoder=libdav1d && make -j$(nproc) && sudo make install && sudo ldconfig && cd ..
+
+          # 安装linuxdeployqt
+          mkdir -p $HOME/bin
+          wget -O $HOME/bin/linuxdeployqt https://github.com/probonopd/linuxdeployqt/releases/download/continuous/linuxdeployqt-continuous-x86_64.AppImage
+          chmod a+x $HOME/bin/linuxdeployqt
+          echo "$HOME/bin" >> $GITHUB_PATH
+
+      # Steam Link依赖配置（适配ubuntu-20.04）
       - name: Setup Steam Link dependencies
         if: matrix.platform.name == 'Steam Link'
         run: |
+          # 安装32位兼容库（ubuntu-20.04版本）
+          sudo dpkg --add-architecture i386
+          sudo apt update
           sudo apt install -y libc6:i386 libstdc++6:i386
+
+          # 克隆Steam Link SDK
           git clone --depth=1 https://github.com/ValveSoftware/steamlink-sdk.git $HOME/steamlink-sdk
           echo "STEAMLINK_SDK_PATH=$HOME/steamlink-sdk" >> $GITHUB_ENV
 
-      # Windows构建（保持原逻辑）
+      # Windows构建步骤
       - name: Build Windows
         if: matrix.platform.name == 'Windows'
         run: |
@@ -102,39 +140,37 @@ jobs:
           scripts\generate-bundle.bat Release
         shell: cmd
 
-      # macOS构建（修复nvm命令缺失问题）
+      # macOS构建步骤（已修复nvm问题）
       - name: Build macOS
         if: matrix.platform.name == 'macOS'
         run: |
           # 安装nvm并加载环境
           curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
           export NVM_DIR="$HOME/.nvm"
-          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # 加载nvm
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
           
-          # 安装Node.js并切换版本
-          nvm install node  # 安装最新稳定版Node
-          nvm use node      # 切换到安装的Node版本
-          
-          # 安装create-dmg
+          nvm install node
+          nvm use node
           npm install --global create-dmg
           
-          # 执行构建脚本
           PATH=$PATH:${{ env.Qt6_DIR }}/bin scripts/generate-dmg.sh Release
 
-      # Linux构建（保持原逻辑）
+      # Linux构建步骤（优化后更快）
       - name: Build Linux
         if: matrix.platform.name == 'Linux'
         run: |
           source /opt/qt515/bin/qt515-env.sh
           PATH=$PATH:$HOME/bin scripts/build-appimage.sh
 
-      # Steam Link构建（保持原逻辑）
+      # Steam Link构建步骤（适配新系统）
       - name: Build Steam Link
         if: matrix.platform.name == 'Steam Link'
         run: |
+          # 强制使用SDK中的工具链（适配ubuntu-20.04）
+          export PATH="$STEAMLINK_SDK_PATH/toolchain/bin:$PATH"
           scripts/build-steamlink-app.sh
 
-      # 产物上传（保持原逻辑）
+      # 产物上传
       - name: Upload Windows artifacts
         if: matrix.platform.name == 'Windows'
         uses: actions/upload-artifact@v4

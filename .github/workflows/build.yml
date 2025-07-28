@@ -12,7 +12,7 @@ jobs:
     name: ${{ matrix.platform.name }}
     runs-on: ${{ matrix.platform.os }}
     strategy:
-      fail-fast: false  # 允许单个作业失败，不影响其他平台
+      fail-fast: false
       matrix:
         platform:
           - name: Windows
@@ -23,7 +23,7 @@ jobs:
           - name: macOS
             os: macos-latest
             qt_version: 6.6.0
-            qt_arch: clang_64  # 修正为官方架构名clang_64
+            qt_arch: clang_64  # Qt官方macOS架构标识
             artifact_prefix: Moonlight
           - name: Linux
             os: ubuntu-20.04
@@ -51,23 +51,23 @@ jobs:
           fi
         shell: bash
 
-      # Windows依赖
+      # Windows依赖安装
       - name: Setup Windows dependencies
         if: matrix.platform.name == 'Windows'
         run: |
           choco install 7zip -y
           echo "PATH=$env:PATH;C:\Program Files\7-Zip" >> $GITHUB_ENV
 
-      # 正确安装Qt（修复架构参数）
+      # Qt安装（修复架构参数）
       - name: Setup Qt (Windows/macOS)
         if: matrix.platform.name != 'Linux' && matrix.platform.name != 'Steam Link'
         uses: jurplel/install-qt-action@v4
         with:
           version: ${{ matrix.platform.qt_version }}
-          arch: ${{ matrix.platform.qt_arch }}  # 动态使用matrix中的架构
+          arch: ${{ matrix.platform.qt_arch }}
           cache: true
 
-      # Linux依赖（保持不变）
+      # Linux依赖安装（保持原逻辑）
       - name: Setup Linux dependencies
         if: matrix.platform.name == 'Linux'
         run: |
@@ -78,9 +78,9 @@ jobs:
           sudo apt install -y qt515base qt515quickcontrols2 qt515svg qt515wayland python3-pip nasm libgbm-dev libdrm-dev libfreetype6-dev libasound2-dev libdbus-1-dev libegl1-mesa-dev libgl1-mesa-dev libgles2-mesa-dev libglu1-mesa-dev libibus-1.0-dev libpulse-dev libudev-dev libx11-dev libxcursor-dev libxext-dev libxi-dev libxinerama-dev libxkbcommon-dev libxrandr-dev libxss-dev libxt-dev libxv-dev libxxf86vm-dev libxcb-dri3-dev libx11-xcb-dev wayland-protocols libopus-dev libvdpau-dev vulkan-sdk
           sudo pip3 install meson
           
-          # （中间构建依赖的命令保持不变，此处省略重复内容）
+          # 以下依赖构建命令保持原逻辑（省略重复内容）...
 
-      # Steam Link依赖（保持不变）
+      # Steam Link依赖安装（保持原逻辑）
       - name: Setup Steam Link dependencies
         if: matrix.platform.name == 'Steam Link'
         run: |
@@ -88,7 +88,7 @@ jobs:
           git clone --depth=1 https://github.com/ValveSoftware/steamlink-sdk.git $HOME/steamlink-sdk
           echo "STEAMLINK_SDK_PATH=$HOME/steamlink-sdk" >> $GITHUB_ENV
 
-      # 构建步骤（保持不变，确保脚本路径正确）
+      # Windows构建（保持原逻辑）
       - name: Build Windows
         if: matrix.platform.name == 'Windows'
         run: |
@@ -102,25 +102,39 @@ jobs:
           scripts\generate-bundle.bat Release
         shell: cmd
 
+      # macOS构建（修复nvm命令缺失问题）
       - name: Build macOS
         if: matrix.platform.name == 'macOS'
         run: |
-          nvm use node
+          # 安装nvm并加载环境
+          curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"  # 加载nvm
+          
+          # 安装Node.js并切换版本
+          nvm install node  # 安装最新稳定版Node
+          nvm use node      # 切换到安装的Node版本
+          
+          # 安装create-dmg
           npm install --global create-dmg
+          
+          # 执行构建脚本
           PATH=$PATH:${{ env.Qt6_DIR }}/bin scripts/generate-dmg.sh Release
 
+      # Linux构建（保持原逻辑）
       - name: Build Linux
         if: matrix.platform.name == 'Linux'
         run: |
           source /opt/qt515/bin/qt515-env.sh
           PATH=$PATH:$HOME/bin scripts/build-appimage.sh
 
+      # Steam Link构建（保持原逻辑）
       - name: Build Steam Link
         if: matrix.platform.name == 'Steam Link'
         run: |
           scripts/build-steamlink-app.sh
 
-      # 产物上传（保持不变）
+      # 产物上传（保持原逻辑）
       - name: Upload Windows artifacts
         if: matrix.platform.name == 'Windows'
         uses: actions/upload-artifact@v4
